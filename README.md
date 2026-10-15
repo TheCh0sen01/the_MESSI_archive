@@ -1,31 +1,42 @@
-# Messi — The Match Archive
+# Messi Match Archive
 
-A responsive Messi fan app for browsing notable matches, organizing them by year → club/international → competition, and tracking a personal watchlist. The fan room has a one-question trivia gate.
+A deployable Next.js + TypeScript app for Messi fans. It includes an archive UI, personal watch tracking, Google sign-in, Firebase persistence, a fan-room chat, and role-aware match management for trusted admins.
 
-## Run it
+## Run locally
 
-Serve this folder with any static web server (Firebase Hosting, Netlify, Vercel, or similar). No build step is required. **Explore the archive** enters local preview mode; it stores the demo profile, watched matches, trivia pass, and fan-room messages in that browser's local storage.
+```bash
+npm install
+cp .env.example .env.local
+npm run dev
+```
 
-## Current prototype scope
+Open `http://localhost:3000`. Without Firebase variables, the app runs in preview mode and saves progress locally. To use Google sign-in and shared data, fill in `.env.local` with the Firebase web app settings.
 
-- The archive is a curated starter collection, not a complete match-by-match career database. It contains 24 notable matches across 2004–2025.
-- Watch links point to Footballia where a known match URL is available. Some entries use the Footballia home page until a specific archive URL is confirmed. Availability and region access can vary.
-- Firebase Google sign-in, per-account cloud watch progress, and live chat are wired but remain inactive until configured.
-- The user role is the default. Admin status comes from a Firebase Auth custom claim named `admin`; set that claim only with a trusted Admin SDK process. The prototype displays the role but does not yet include a match-management console.
-- The trivia gate is currently a client-side fan filter, so it is not secure access control. Add a trusted server-side quiz check before treating the room as restricted to verified fans.
+## Firebase setup
 
-## Deploy as a static preview
+1. Create a Firebase project and register a web app.
+2. Enable **Authentication → Google** and add the local and deployed domains to authorized domains.
+3. Create a Cloud Firestore database.
+4. Add the values from the Firebase web app config to `.env.local` using the variable names in `.env.example`.
+5. Publish `firestore.rules` to the project.
+6. Grant `admin: true` as a Firebase Auth custom claim using a trusted Admin SDK process. The browser cannot set its own role; only accounts with the verified claim see admin tools, and Firestore rules enforce write access.
 
-Upload this folder to a static host such as Firebase Hosting, Netlify, Vercel, or GitHub Pages for a local-storage prototype. For a connected Firebase release, use the Firebase setup below first. No hosting account is connected from this workspace, so a public deployment needs a host/project to publish to.
+The trivia gate is currently a client-side fan filter. Before treating chat as restricted access, validate trivia server-side or with a trusted Cloud Function. Firestore rules currently permit any signed-in user to read and write chat messages; add moderation, rate limiting, and a server-validated fan gate before opening the chat to the public.
 
-## Production connection checklist
+## Deploy with Vercel
 
-1. Create a Firebase project, register a web app, and create a Firestore database.
-2. Enable Google in **Authentication → Sign-in method** and add your deployed domain to authorized domains.
-3. Copy the Firebase web app config into `firebase-config.js` as the value of `window.MESSI_FIREBASE_CONFIG`.
-4. Publish `firestore.rules` from the Firebase console or Firebase CLI. Rules keep each user's progress private and chat limited to signed-in users.
-5. Grant `admin: true` as a Firebase Auth custom claim only through a trusted Admin SDK process. Never accept a role supplied by the browser. Admin claim currently labels the profile; match-management UI still needs to be built.
-6. Add server-side trivia validation before relying on the quiz as access control.
-7. Import a complete, source-verified match dataset and validate every watch URL. The current seed data is intentionally representative, not exhaustive.
+Import the repository in Vercel, keep the project root at the repository root, select the Next.js framework preset, and add the same `NEXT_PUBLIC_FIREBASE_*` variables under **Project Settings → Environment Variables**. Redeploy after setting them. The `build` script is `next build` and Vercel handles the Next.js runtime automatically.
 
-The hero photo is credited in the interface: Fanny Schertzer, CC BY 3.0.
+You can also deploy from a terminal with the Vercel CLI after linking a Vercel project: `vercel` for a preview deployment and `vercel --prod` for production.
+
+## Archive data
+
+`lib/matches.ts` contains a starter list of 24 notable matches across 2004–2025. It is not a complete career match database, and several Footballia links currently lead to the Footballia home page until verified match pages are added. Admins can add archive entries from the app after Firebase and an admin custom claim are set up. Verify match metadata, links, and source rights before importing a complete archive.
+
+## Stack
+
+- Next.js App Router and React
+- TypeScript
+- Firebase Authentication and Cloud Firestore
+- Vercel deployment
+- Responsive custom CSS
