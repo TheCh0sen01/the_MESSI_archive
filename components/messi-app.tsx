@@ -7,7 +7,7 @@ import { onAuthStateChanged, signInWithPopup, signOut, type User as FirebaseUser
 import {
   ArrowDown, ArrowUpRight, CalendarDays, Check, ChevronDown, CircleHelp, Clock3,
   Filter, Globe2, LayoutGrid, LockKeyhole, LogOut, Menu, MessageCircle, Plus,
-  Search, Send, Shield, Sparkles, Star, Trash2, Trophy, X,
+  Search, Send, Shield, Sparkles, Star, Trash2, Trophy, X, LogIn,
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { firebaseEnabled, getFirebase } from "@/lib/firebase";
@@ -18,6 +18,7 @@ type Progress = { watched: string[]; saved: string[]; quizPassed: boolean };
 type ChatMessage = { id: string; uid: string; name: string; text: string; time: string; createdAt?: unknown };
 type View = "matches" | "watchlist" | "community" | "admin";
 const emptyProgress: Progress = { watched: [], saved: [], quizPassed: false };
+const previewUser: AppUser = { uid: "preview", name: "Messi fan", role: "user" };
 const localKey = "messi-archive-progress-v2";
 const quiz = {
   question: "Which country did Messi win his first senior international trophy with?",
@@ -43,12 +44,12 @@ function MatchRow({
   match: Match; watched: boolean; saved: boolean; onWatched: () => void; onSaved: () => void;
   canDelete?: boolean; onDelete?: () => void;
 }) {
-  const directLink = match.url !== "https://footballia.net";
+  const directLink = match.url.startsWith("https://footballia.net/matches/");
   return (
     <article className="match-row">
       <div className="match-date">{formatDate(match.date)}</div>
       <div className="match-info">
-        <b>{match.team} <span className="versus">vs</span> {match.opponent} <span className="score">{match.score}</span></b>
+        <b>{match.team} <span className="versus">vs</span> {match.opponent} {match.score && <span className="score">{match.score}</span>}</b>
         <small>{match.stage}</small>
       </div>
       <div className="match-comp">{match.competition}</div>
@@ -66,13 +67,13 @@ function MatchRow({
 }
 
 export default function MessiApp() {
-  const [user, setUser] = useState<AppUser | null>(null);
+  const [user, setUser] = useState<AppUser | null>(previewUser);
   const [progress, setProgress] = useState<Progress>(() => typeof window === "undefined" ? emptyProgress : readLocal());
   const [ready, setReady] = useState(!firebaseEnabled);
   const [view, setView] = useState<View>("matches");
   const [filter, setFilter] = useState("All");
   const [search, setSearch] = useState("");
-  const [openYears, setOpenYears] = useState<number[]>([2022, 2009]);
+  const [collapsedYears, setCollapsedYears] = useState<number[]>([]);
   const [toast, setToast] = useState("");
   const [remoteMatches, setRemoteMatches] = useState<Match[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -96,7 +97,7 @@ export default function MessiApp() {
     const unsubscribe = onAuthStateChanged(firebase.auth, async (authUser) => {
       setReady(false);
       if (!authUser) {
-        setUser(null);
+        setUser(previewUser);
         setProgress(readLocal());
         setRemoteMatches([]);
         setReady(true);
@@ -110,15 +111,15 @@ export default function MessiApp() {
   }, []);
 
   useEffect(() => {
-    if (!firebase || !user) return;
+    if (!firebase || !user || !ready || user.uid === "preview") return;
     return onSnapshot(collection(firebase.db, "matches"), (snapshot) => {
       setRemoteMatches(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as Match));
     }, () => notify("Couldn't load the shared match archive."));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.uid]);
+  }, [user?.uid, ready]);
 
   useEffect(() => {
-    if (!firebase || !user || view !== "community" || !progress.quizPassed) return;
+    if (!firebase || !user || user.uid === "preview" || view !== "community" || !progress.quizPassed) return;
     const chatQuery = query(collection(firebase.db, "chatMessages"), orderBy("createdAt", "asc"));
     return onSnapshot(chatQuery, (snapshot) => {
       setMessages(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as ChatMessage));
@@ -129,7 +130,7 @@ export default function MessiApp() {
   useEffect(() => {
     if (!ready) return;
     localStorage.setItem(`${localKey}:${user?.uid || "preview"}`, JSON.stringify(progress));
-    if (firebase && user) {
+    if (firebase && user && user.uid !== "preview") {
       setDoc(doc(firebase.db, "users", user.uid), {
         name: user.name, watched: progress.watched, saved: progress.saved,
         quizPassed: progress.quizPassed, updatedAt: serverTimestamp(),
@@ -144,7 +145,7 @@ export default function MessiApp() {
 
   function notify(message: string) {
     setToast(message);
-    window.setTimeout(() => setToast(""), 2400);
+    window.setTimeout(() => setToast(""), 5200);
   }
 
   async function hydrateUser(authUser: FirebaseUser, db: NonNullable<ReturnType<typeof getFirebase>>["db"]) {
@@ -172,16 +173,23 @@ export default function MessiApp() {
   }
 
   async function googleSignIn() {
-    if (!firebase) { setUser({ uid: "preview", name: "Messi fan", role: "user" }); setProgress(readLocal()); setReady(true); return; }
+    if (!firebase) { notify("Google sign-in is not configured yet. Add the six Firebase web app values in Vercel, then redeploy."); return; }
     setBusy(true);
     try { await signInWithPopup(firebase.auth, firebase.googleProvider); }
-    catch { notify("Google sign-in didn't finish. Check the Firebase auth settings."); }
+    catch (error) {
+      const code = (error as { code?: string })?.code;
+      if (code === "auth/unauthorized-domain") notify("Add the-messi-archive.vercel.app under Firebase Authentication → Settings → Authorized domains.");
+      else if (code === "auth/operation-not-allowed") notify("Enable Google in Firebase Authentication → Sign-in method.");
+      else if (code === "auth/popup-blocked") notify("Your browser blocked the Google sign-in popup. Allow popups for this site and try again.");
+      else if (code === "auth/popup-closed-by-user" || code === "auth/cancelled-popup-request") notify("Google sign-in was cancelled.");
+      else notify(`Google sign-in failed${code ? ` (${code})` : ""}. Check Firebase Authentication setup.`);
+    }
     finally { setBusy(false); }
   }
 
   async function logout() {
     if (firebase) await signOut(firebase.auth);
-    setUser(null); setProgress(readLocal()); setView("matches");
+    setUser(previewUser); setProgress(readLocal()); setView("matches");
   }
 
   function toggleProgress(field: "watched" | "saved", id: string) {
@@ -189,7 +197,7 @@ export default function MessiApp() {
   }
 
   function enterPreview() {
-    setUser({ uid: "preview", name: "Messi fan", role: "user" });
+    setUser(previewUser);
     setProgress(readLocal()); setReady(true);
   }
 
@@ -280,22 +288,22 @@ export default function MessiApp() {
         {user.role === "admin" && <><div className="side-label side-label-admin">MANAGEMENT</div><button className={`nav-item ${view === "admin" ? "active" : ""}`} onClick={() => {setView("admin");setMobileNav(false)}}><Shield size={16}/> Manage matches <span className="nav-lock">ADMIN</span></button></>}
         <div className="sidebar-bottom">
           <div className="sidebar-tip"><Sparkles size={15}/><div><b>One match at a time.</b><small>Your journey is just getting started.</small></div></div>
-          <div className="profile"><div className="avatar" aria-label={`${user.name} profile`} style={user.photo ? { backgroundImage: `url("${user.photo}")`, backgroundSize: "cover", backgroundPosition: "center" } : undefined}>{!user.photo && user.name[0]?.toUpperCase()}</div><div className="profile-copy"><b>{user.name}</b><small>{user.role === "admin" ? "ARCHIVE ADMIN" : "MESSI FAN"}</small></div><button className="signout" title="Sign out" onClick={logout}><LogOut size={15}/></button></div>
+          <div className="profile"><div className="avatar" aria-label={`${user.name} profile`} style={user.photo ? { backgroundImage: `url("${user.photo}")`, backgroundSize: "cover", backgroundPosition: "center" } : undefined}>{!user.photo && user.name[0]?.toUpperCase()}</div><div className="profile-copy"><b>{user.name}</b><small>{user.role === "admin" ? "ARCHIVE ADMIN" : user.uid === "preview" ? "LOCAL PREVIEW" : "MESSI FAN"}</small></div><button className="signout" title={user.uid === "preview" ? "Sign in with Google" : "Sign out"} onClick={user.uid === "preview" ? googleSignIn : logout}>{user.uid === "preview" ? <LogIn size={15}/> : <LogOut size={15}/>}</button></div>
         </div>
       </aside>
       <main className="main-content">
-        <header className="topbar"><div className="crumb">THE ARCHIVE <span>/</span> <b>{title}</b></div><div className="top-right"><span className="saved-indicator"><i/> {ready ? "Progress saved" : "Syncing…"}</span><button className="mobile-menu" onClick={() => setMobileNav(!mobileNav)} aria-label="Toggle menu"><Menu size={18}/></button></div></header>
+        <header className="topbar"><div className="crumb">THE ARCHIVE <span>/</span> <b>{title}</b></div><div className="top-right"><span className="saved-indicator"><i/> {ready ? "Progress saved" : "Syncing…"}</span>{user.uid === "preview" && <button className="auth-cta" onClick={googleSignIn} disabled={busy}><span className="google-g">G</span>{busy ? "Connecting…" : "Sign in with Google"}</button>}<button className="mobile-menu" onClick={() => setMobileNav(!mobileNav)} aria-label="Toggle menu"><Menu size={18}/></button></div></header>
 
         {view === "matches" && <div className="page">
           <section className="hero-card"><div className="hero-bg"/><div className="hero-content"><div className="eyebrow">THE LONG WAY HOME <span>· 2004 — NOW</span></div><h2>A career written<br/>in <em>moments.</em></h2><p>From the first steps in Barcelona to the world champion&apos;s crown. Your journey through every era starts here.</p><button className="hero-cta" onClick={() => document.getElementById("archiveSection")?.scrollIntoView({behavior:"smooth"})}>Explore the matches <ArrowDown size={13}/></button></div><div className="hero-number">10</div><div className="hero-stats"><div><b>20<span>+</span></b><small>SEASONS</small></div><i/><div><b>6</b><small>CHAPTERS</small></div><i/><div><b>{watchedCount}</b><small>WATCHED BY YOU</small></div></div></section>
           <section className="archive-section" id="archiveSection">
-            <div className="section-head"><div><div className="eyebrow">PICK UP WHEREVER YOU LIKE</div><h2>The match archive</h2><p>Every era has a story. Find yours.</p></div><span className="filter-button"><Filter size={14}/><span>{matches.length} matches</span></span></div>
-            <div className="toolbar"><label className="search-wrap"><Search size={16}/><input value={search} onChange={(e) => setSearch(e.target.value)} type="search" placeholder="Search a club, tournament, year…"/></label><div className="filter-pills">{["All", "Club", "International"].map((kind) => <button key={kind} className={`pill ${filter === kind ? "active" : ""}`} onClick={() => setFilter(kind)}>{kind === "All" ? "All matches" : kind}</button>)}</div></div>
+            <div className="section-head"><div><div className="eyebrow">PICK UP WHEREVER YOU LIKE</div><h2>The match archive</h2><p>Every era has a story. <a className="source-link" href="https://footballia.net/players/lionel-leo-andres-messi" target="_blank" rel="noreferrer">Open the Footballia Messi archive <ArrowUpRight size={11}/></a></p></div><span className="filter-button"><Filter size={14}/><span>{matches.length} matches</span></span></div>
+            <div className="toolbar"><label className="search-wrap"><Search size={16}/><input value={search} onChange={(e) => setSearch(e.target.value)} type="search" placeholder="Search a club, tournament, year…"/></label><div className="filter-pills">{["All", "Club", "International"].map((kind) => <button key={kind} className={`pill ${filter === kind ? "active" : ""}`} onClick={() => setFilter(kind)}>{kind === "All" ? "All matches" : kind}</button>)}<button className="pill expand-toggle" onClick={() => setCollapsedYears((current) => years.every((year) => !current.includes(year)) ? years : [])}>{years.every((year) => !collapsedYears.includes(year)) ? "Collapse years" : "Expand years"}</button></div></div>
             <div className="archive-list">{years.map((year) => {
               const rows = filtered.filter((match) => match.year === year);
-              const isOpen = openYears.includes(year) || !!search || filter !== "All";
+              const isOpen = !collapsedYears.includes(year) || !!search || filter !== "All";
               const types = [...new Set(rows.map((match) => match.type))];
-              return <section className="year-block" key={year}><button className="year-heading year-toggle" onClick={() => setOpenYears((prev) => prev.includes(year) ? prev.filter((y) => y !== year) : [...prev, year])}><b>{year}</b><span>{rows.length} {rows.length === 1 ? "MATCH" : "MATCHES"}</span><i/><ChevronDown className={isOpen ? "turned" : ""} size={15}/></button>{isOpen && <div className="year-body">{types.map((type) => {
+              return <section className="year-block" key={year}><button className="year-heading year-toggle" onClick={() => setCollapsedYears((prev) => prev.includes(year) ? prev.filter((y) => y !== year) : [...prev, year])}><b>{year}</b><span>{rows.length} {rows.length === 1 ? "MATCH" : "MATCHES"}</span><i/><ChevronDown className={isOpen ? "turned" : ""} size={15}/></button>{isOpen && <div className="year-body">{types.map((type) => {
                 const items = rows.filter((match) => match.type === type);
                 return <div key={type} className="type-group"><div className={`type-heading ${type === "International" ? "gold" : ""}`}>{type === "International" ? <Globe2 size={12}/> : <Trophy size={12}/>} {type.toUpperCase()}<i/></div>{[...new Set(items.map((m) => m.competition))].map((competition) => <div key={competition}><div className="competition-heading">{competition}<i/></div>{items.filter((m) => m.competition === competition).map((match) => <MatchRow key={match.id} match={match} watched={progress.watched.includes(match.id)} saved={progress.saved.includes(match.id)} onWatched={() => toggleProgress("watched", match.id)} onSaved={() => toggleProgress("saved", match.id)}/>)}</div>)}
                 </div>;
@@ -310,7 +318,7 @@ export default function MessiApp() {
 
         {view === "admin" && user.role === "admin" && <div className="page"><div className="simple-page-head"><div className="eyebrow">ARCHIVE MANAGEMENT</div><h1>Manage matches</h1><p>Add to or curate the shared match archive. Admin access is verified by Firebase.</p></div><div className="admin-toolbar"><div><Shield size={16}/><b>Admin controls</b><span>{remoteMatches.length} added matches</span></div><button className="admin-add" onClick={() => setMatchFormOpen(!matchFormOpen)}>{matchFormOpen ? <X size={15}/> : <Plus size={15}/>} {matchFormOpen ? "Cancel" : "Add a match"}</button></div>{matchFormOpen && <form className="match-form" onSubmit={addMatch}><label>Match date<input type="date" name="date" required/></label><label>Team<input name="team" placeholder="Barcelona" required/></label><label>Opponent<input name="opponent" placeholder="Real Madrid" required/></label><label>Competition<input name="competition" placeholder="La Liga" required/></label><label>Stage<input name="stage" placeholder="Matchday 34" required/></label><label>Score<input name="score" placeholder="2–6" required/></label><label>Match type<select name="type"><option>Club</option><option>International</option></select></label><label className="wide">Footballia link<input name="url" type="url" placeholder="https://footballia.net/matches/…" required/></label><button className="admin-add submit-match" type="submit"><Plus size={14}/> Publish match</button></form>}<div className="list-card admin-list">{remoteMatches.length ? remoteMatches.map((match) => <MatchRow key={match.id} match={match} watched={progress.watched.includes(match.id)} saved={progress.saved.includes(match.id)} onWatched={() => toggleProgress("watched", match.id)} onSaved={() => toggleProgress("saved", match.id)} canDelete onDelete={() => deleteMatch(match)}/>) : <div className="empty-state"><CalendarDays size={27}/><b>No custom matches yet</b><p>Use the admin form to add matches to the shared archive.</p></div>}</div></div>}
       </main>
-      {toast && <div className="toast"><Check size={14}/>{toast}</div>}
+      {toast && <div className="toast show" role="alert"><Check size={14}/>{toast}</div>}
       {mobileNav && <button className="nav-scrim" onClick={() => setMobileNav(false)} aria-label="Close menu"/>}
     </div>
   );
