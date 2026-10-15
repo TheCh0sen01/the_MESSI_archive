@@ -11,9 +11,11 @@ export type Match = {
   url: string;
 };
 
+import footballiaIndex from "./footballia-messi-matches.json";
+
 const f = "https://footballia.net";
 
-export const seedMatches: Match[] = [
+const featuredMatches: Match[] = [
   { id: "m-2004-10-16", date: "2004-10-16", year: 2004, type: "Club", team: "Barcelona", opponent: "Espanyol", competition: "La Liga", stage: "Matchday 7", score: "0–1", url: `${f}/matches/espanyol-fc-barcelona-liga-1-division-2004-2005` },
   { id: "m-2005-05-01", date: "2005-05-01", year: 2005, type: "Club", team: "Barcelona", opponent: "Albacete", competition: "La Liga", stage: "Matchday 34", score: "2–0", url: `${f}/matches/fc-barcelona-albacete-liga-1-division-2004-2005` },
   { id: "m-2005-08-24", date: "2005-08-24", year: 2005, type: "Club", team: "Barcelona", opponent: "Juventus", competition: "Joan Gamper Trophy", stage: "Final", score: "2–2", url: f },
@@ -39,3 +41,23 @@ export const seedMatches: Match[] = [
   { id: "m-2024-07-14", date: "2024-07-14", year: 2024, type: "International", team: "Argentina", opponent: "Colombia", competition: "Copa América", stage: "Final", score: "1–0", url: f },
   { id: "m-2025-06-29", date: "2025-06-29", year: 2025, type: "Club", team: "Inter Miami", opponent: "Palmeiras", competition: "FIFA Club World Cup", stage: "Round of 16", score: "0–0", url: f },
 ];
+
+const featuredByUrl = new Map(featuredMatches.filter((match) => match.url.startsWith(`${f}/matches/`)).map((match) => [match.url, match]));
+const normalizeTeam = (team: string) => team.toLowerCase().replace(/\bfc\b/g, "").replace(/[^a-z0-9]/g, "");
+const fixtureKey = (date: string, teams: string[]) => `${date}:${teams.map(normalizeTeam).sort().join(":")}`;
+const featuredByFixture = new Map(featuredMatches.map((match) => [fixtureKey(match.date, [match.team, match.opponent]), match]));
+
+// Footballia's public Messi index supplies one canonical direct page per match.
+// Curated highlights enrich matching entries with a verified score and stage.
+export const seedMatches: Match[] = (footballiaIndex as Match[]).map((match) => {
+  const featured = featuredByUrl.get(match.url) || featuredByFixture.get(fixtureKey(match.date, [match.team, match.opponent]));
+  const verifiedFeaturedLink = featured?.url.startsWith(`${f}/matches/`) ? featured : undefined;
+  return {
+    ...match,
+    ...(verifiedFeaturedLink || (featured ? { competition: featured.competition, stage: featured.stage, score: featured.score } : {})),
+    id: featured?.id || match.id,
+    date: match.date,
+    year: match.year,
+    url: match.url,
+  };
+});
