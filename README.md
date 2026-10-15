@@ -31,7 +31,9 @@ You can also deploy from a terminal with the Vercel CLI after linking a Vercel p
 
 ## Archive data
 
-`lib/matches.ts` contains a starter list of 24 notable matches across 2004–2025. It is not a complete career match database, and several Footballia links currently lead to the Footballia home page until verified match pages are added. Admins can add archive entries from the app after Firebase and an admin custom claim are set up. Verify match metadata, links, and source rights before importing a complete archive.
+`lib/footballia-messi-matches.json` contains the match pages indexed in [Footballia's Lionel Messi archive](https://footballia.net/players/lionel-leo-andres-messi). Each row links to that specific match page; match dates, opponents, competitions, and club/international classification come from Footballia's index. Footballia availability is not the same as every senior appearance in Messi's career, and some records do not list a score. Admins can add archive entries after Firebase and an admin custom claim are set up.
+
+The app expands every year by default and supports collapsing individual years or all years. For Google sign-in, the six Firebase web app variables in `.env.example` must be populated in Vercel, Google must be enabled under Firebase Authentication → Sign-in method, and `the-messi-archive.vercel.app` must be listed under Authentication → Settings → Authorized domains. After changing Vercel variables, redeploy the project.
 
 ## Stack
 
