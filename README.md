@@ -33,7 +33,11 @@ You can also deploy from a terminal with the Vercel CLI after linking a Vercel p
 
 `lib/footballia-messi-matches.json` contains the match pages indexed in [Footballia's Lionel Messi archive](https://footballia.net/players/lionel-leo-andres-messi). Each row links to that specific match page; match dates, opponents, competitions, and club/international classification come from Footballia's index. Footballia availability is not the same as every senior appearance in Messi's career, and some records do not list a score. Admins can add archive entries after Firebase and an admin custom claim are set up.
 
-The app expands every year by default and supports collapsing individual years or all years. For Google sign-in, the six Firebase web app variables in `.env.example` must be populated in Vercel, Google must be enabled under Firebase Authentication → Sign-in method, and `the-messi-archive.vercel.app` must be listed under Authentication → Settings → Authorized domains. After changing Vercel variables, redeploy the project.
+The archive starts with photo-led year cards. Choosing a year filters its indexed matches, and match lists use pagination (24 at a time across all years, 18 within a selected year). Each match has a shared comments thread for signed-in fans. Comments are stored in the `matchComments` collection and governed by `firestore.rules`.
+
+For Google sign-in, the six Firebase web app variables in `.env.example` must be populated in Vercel, Google must be enabled under Firebase Authentication → Sign-in method, and `the-messi-archive.vercel.app` must be listed under Authentication → Settings → Authorized domains. A Firestore sync error also requires a Cloud Firestore database and the current `firestore.rules` to be published in Firebase Console → Firestore Database → Rules. After changing Vercel variables, redeploy the project.
+
+Season card photography is illustrative by career era rather than a match-by-match photo archive. The card images are credited in the interface: M. Caimary (Barcelona, 2011; [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/)), H. Zohrevand (Argentina, 2022; [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)), and Fanny Schertzer (Flickr; [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/)).
 
 ## Stack
 

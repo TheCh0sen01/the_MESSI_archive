@@ -1,21 +1,22 @@
 "use client";
 
 import {
-  addDoc, collection, deleteDoc, doc, onSnapshot, orderBy, query, serverTimestamp, setDoc,
+  addDoc, collection, deleteDoc, doc, onSnapshot, orderBy, query, serverTimestamp, setDoc, where,
 } from "firebase/firestore";
 import { onAuthStateChanged, signInWithPopup, signOut, type User as FirebaseUser } from "firebase/auth";
 import {
   ArrowDown, ArrowUpRight, CalendarDays, Check, ChevronDown, CircleHelp, Clock3,
   Filter, Globe2, LayoutGrid, LockKeyhole, LogOut, Menu, MessageCircle, Plus,
-  Search, Send, Shield, Sparkles, Star, Trash2, Trophy, X, LogIn,
+  Search, Send, Shield, Sparkles, Star, Trash2, Trophy, X, LogIn, MessageSquareText,
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { firebaseEnabled, getFirebase } from "@/lib/firebase";
 import { Match, seedMatches } from "@/lib/matches";
 
 type AppUser = { uid: string; name: string; email?: string; photo?: string; role: "user" | "admin" };
 type Progress = { watched: string[]; saved: string[]; quizPassed: boolean };
 type ChatMessage = { id: string; uid: string; name: string; text: string; time: string; createdAt?: unknown };
+type MatchComment = { id: string; matchId: string; uid: string; name: string; text: string; createdAt?: { toDate?: () => Date } };
 type View = "matches" | "watchlist" | "community" | "admin";
 const emptyProgress: Progress = { watched: [], saved: [], quizPassed: false };
 const previewUser: AppUser = { uid: "preview", name: "Messi fan", role: "user" };
@@ -38,11 +39,70 @@ function formatDate(date: string) {
   return new Date(`${date}T12:00:00`).toLocaleDateString("en", { month: "short", day: "2-digit" }).toUpperCase();
 }
 
+const seasonPhotos = [
+  "https://commons.wikimedia.org/wiki/Special:FilePath/Lionel_Messi_2%2C_2011.jpg?width=900",
+  "https://commons.wikimedia.org/wiki/Special:FilePath/Lionel_Messi_WC2022.jpg?width=900",
+  "https://live.staticflickr.com/2913/14339713079_4ab237d66f_b.jpg",
+];
+const seasonPhoto = (year: number) => year <= 2012 ? seasonPhotos[0] : year <= 2022 ? seasonPhotos[1] : seasonPhotos[2];
+const seasonPhotoCredit = (year: number) => year <= 2012 ? "M. Caimary · CC BY 2.0" : year <= 2022 ? "H. Zohrevand · CC BY 4.0" : "Fanny Schertzer · CC BY 3.0";
+
+function MatchComments({ match, user, firebase, notify }: {
+  match: Match; user: AppUser; firebase: ReturnType<typeof getFirebase>; notify: (message: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [comments, setComments] = useState<MatchComment[]>([]);
+  const [sending, setSending] = useState(false);
+  useEffect(() => {
+    if (!open || !firebase || user.uid === "preview") return;
+    const commentsQuery = query(collection(firebase.db, "matchComments"), where("matchId", "==", match.id));
+    return onSnapshot(commentsQuery, (snapshot) => {
+      setComments(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as MatchComment)
+        .sort((a, b) => (a.createdAt?.toDate?.().getTime() || 0) - (b.createdAt?.toDate?.().getTime() || 0)));
+    }, (error) => notify(`Comments could not load (${error.code}). Check Firestore setup and rules.`));
+    // notify is stable for this component lifetime.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, firebase, user.uid, match.id]);
+
+  async function postComment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const text = String(new FormData(form).get("comment") || "").trim();
+    if (!text) return;
+    if (!firebase || user.uid === "preview") { notify("Sign in with Google to join match comments."); return; }
+    setSending(true);
+    try {
+      await addDoc(collection(firebase.db, "matchComments"), {
+        matchId: match.id, uid: user.uid, name: user.name, text, createdAt: serverTimestamp(),
+      });
+      form.reset();
+    } catch (error) {
+      const code = (error as { code?: string }).code || "unknown";
+      notify(`Comment could not post (${code}). Check Firestore setup and rules.`);
+    } finally { setSending(false); }
+  }
+
+  return <div className="comments-area">
+    <button className={`comments-toggle ${open ? "active" : ""}`} onClick={() => setOpen((value) => !value)} aria-expanded={open}>
+      <MessageSquareText size={13}/> {open ? "Hide comments" : "Comments"}{comments.length > 0 && <span>{comments.length}</span>}
+    </button>
+    {open && <div className="comments-panel">
+      {!firebase || user.uid === "preview" ? <p className="comments-signin">Sign in with Google to read and add to the fan conversation for this match.</p> : <>
+        <div className="comments-list">{comments.length ? comments.map((comment) => <article className="fan-comment" key={comment.id}>
+          <div className="comment-avatar">{comment.name?.[0]?.toUpperCase() || "M"}</div><div><b>{comment.name}</b><small>{comment.createdAt?.toDate?.().toLocaleString() || "Just now"}</small><p>{comment.text}</p></div>
+        </article>) : <p className="comments-signin">No comments yet. Start the conversation about this match.</p>}</div>
+        <form className="comment-form" onSubmit={postComment}><input name="comment" maxLength={500} placeholder="Share your match memory…" required/><button disabled={sending} aria-label="Post comment"><Send size={14}/></button></form>
+      </>}
+    </div>}
+  </div>;
+}
+
 function MatchRow({
-  match, watched, saved, onWatched, onSaved, canDelete, onDelete,
+  match, watched, saved, onWatched, onSaved, canDelete, onDelete, user, firebase, notify,
 }: {
   match: Match; watched: boolean; saved: boolean; onWatched: () => void; onSaved: () => void;
   canDelete?: boolean; onDelete?: () => void;
+  user?: AppUser; firebase?: ReturnType<typeof getFirebase>; notify?: (message: string) => void;
 }) {
   const directLink = match.url.startsWith("https://footballia.net/matches/");
   return (
@@ -62,6 +122,7 @@ function MatchRow({
         <button className={`watched-btn ${watched ? "checked" : ""}`} onClick={onWatched} title={watched ? "Mark unwatched" : "Mark watched"} aria-label={watched ? "Mark unwatched" : "Mark watched"}><Check size={13}/></button>
         {canDelete && <button className="save-btn danger" onClick={onDelete} title="Delete match" aria-label="Delete match"><Trash2 size={15}/></button>}
       </div>
+      <MatchComments match={match} user={user || previewUser} firebase={firebase || null} notify={notify || (() => {})}/>
     </article>
   );
 }
@@ -74,6 +135,8 @@ export default function MessiApp() {
   const [filter, setFilter] = useState("All");
   const [search, setSearch] = useState("");
   const [collapsedYears, setCollapsedYears] = useState<number[]>([]);
+  const [selectedYear, setSelectedYear] = useState<number | null>(null);
+  const [page, setPage] = useState(1);
   const [toast, setToast] = useState("");
   const [remoteMatches, setRemoteMatches] = useState<Match[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -82,7 +145,7 @@ export default function MessiApp() {
   const [matchFormOpen, setMatchFormOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const chatEnd = useRef<HTMLDivElement>(null);
-  const firebase = getFirebase();
+  const firebase = useMemo(() => getFirebase(), []);
 
   const matches = useMemo(() => {
     const merged = new Map(seedMatches.map((m) => [m.id, m]));
@@ -143,16 +206,19 @@ export default function MessiApp() {
     chatEnd.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, view]);
 
+  useEffect(() => { setPage(1); }, [filter, search, selectedYear]);
+
   function notify(message: string) {
     setToast(message);
     window.setTimeout(() => setToast(""), 5200);
   }
 
   async function hydrateUser(authUser: FirebaseUser, db: NonNullable<ReturnType<typeof getFirebase>>["db"]) {
-    const token = await authUser.getIdTokenResult(true);
-    const role = token.claims.admin === true ? "admin" : "user";
     const name = authUser.displayName || authUser.email || "Messi fan";
+    let role: AppUser["role"] = "user";
     try {
+      const token = await authUser.getIdTokenResult(true);
+      role = token.claims.admin === true ? "admin" : "user";
       const { getDoc } = await import("firebase/firestore");
       const saved = await getDoc(doc(db, "users", authUser.uid));
       const remote = saved.exists() ? saved.data() : {};
@@ -163,10 +229,16 @@ export default function MessiApp() {
         quizPassed: remote.quizPassed === true,
       });
       await setDoc(doc(db, "users", authUser.uid), { name, updatedAt: serverTimestamp() }, { merge: true });
-    } catch {
+    } catch (error) {
       setUser({ uid: authUser.uid, name, email: authUser.email || undefined, photo: authUser.photoURL || undefined, role });
       setProgress(readLocal(authUser.uid));
-      notify("Signed in, but the profile could not sync. Check Firebase setup.");
+      const code = (error as { code?: string })?.code;
+      const nextStep = code?.includes("permission-denied")
+        ? " Publish firestore.rules in Firebase Console → Firestore Database → Rules."
+        : code?.includes("not-found")
+          ? " Create a Cloud Firestore database in Firebase Console."
+          : " Check that the Firestore database exists and firestore.rules are published.";
+      notify(`Signed in, but Firestore profile sync failed${code ? ` (${code})` : ""}.${nextStep}`);
     } finally {
       setReady(true);
     }
@@ -248,9 +320,14 @@ export default function MessiApp() {
   }
 
   const filtered = useMemo(() => matches
+    .filter((match) => selectedYear === null || match.year === selectedYear)
     .filter((match) => filter === "All" || match.type === filter)
-    .filter((match) => !search || `${match.year} ${match.team} ${match.opponent} ${match.competition} ${match.stage}`.toLowerCase().includes(search.toLowerCase())), [matches, filter, search]);
-  const years = [...new Set(filtered.map((match) => match.year))].sort((a, b) => b - a);
+    .filter((match) => !search || `${match.year} ${match.team} ${match.opponent} ${match.competition} ${match.stage}`.toLowerCase().includes(search.toLowerCase())), [matches, filter, search, selectedYear]);
+  const seasons = [...new Set(matches.map((match) => match.year))].sort((a, b) => b - a);
+  const pageSize = selectedYear === null ? 24 : 18;
+  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const pageMatches = filtered.slice((page - 1) * pageSize, page * pageSize);
+  const years = [...new Set(pageMatches.map((match) => match.year))].sort((a, b) => b - a);
   const watchedCount = progress.watched.length;
   const percent = Math.round((watchedCount / Math.max(matches.length, 1)) * 100);
   const title = { matches: "MATCHES", watchlist: "MY WATCHLIST", community: "FAN ROOM", admin: "ADMIN" }[view];
@@ -298,25 +375,33 @@ export default function MessiApp() {
           <section className="hero-card"><div className="hero-bg"/><div className="hero-content"><div className="eyebrow">THE LONG WAY HOME <span>· 2004 — NOW</span></div><h2>A career written<br/>in <em>moments.</em></h2><p>From the first steps in Barcelona to the world champion&apos;s crown. Your journey through every era starts here.</p><button className="hero-cta" onClick={() => document.getElementById("archiveSection")?.scrollIntoView({behavior:"smooth"})}>Explore the matches <ArrowDown size={13}/></button></div><div className="hero-number">10</div><div className="hero-stats"><div><b>20<span>+</span></b><small>SEASONS</small></div><i/><div><b>6</b><small>CHAPTERS</small></div><i/><div><b>{watchedCount}</b><small>WATCHED BY YOU</small></div></div></section>
           <section className="archive-section" id="archiveSection">
             <div className="section-head"><div><div className="eyebrow">PICK UP WHEREVER YOU LIKE</div><h2>The match archive</h2><p>Every era has a story. <a className="source-link" href="https://footballia.net/players/lionel-leo-andres-messi" target="_blank" rel="noreferrer">Open the Footballia Messi archive <ArrowUpRight size={11}/></a></p></div><span className="filter-button"><Filter size={14}/><span>{matches.length} matches</span></span></div>
-            <div className="toolbar"><label className="search-wrap"><Search size={16}/><input value={search} onChange={(e) => setSearch(e.target.value)} type="search" placeholder="Search a club, tournament, year…"/></label><div className="filter-pills">{["All", "Club", "International"].map((kind) => <button key={kind} className={`pill ${filter === kind ? "active" : ""}`} onClick={() => setFilter(kind)}>{kind === "All" ? "All matches" : kind}</button>)}<button className="pill expand-toggle" onClick={() => setCollapsedYears((current) => years.every((year) => !current.includes(year)) ? years : [])}>{years.every((year) => !collapsedYears.includes(year)) ? "Collapse years" : "Expand years"}</button></div></div>
+            <div className="season-picker-head"><div><div className="eyebrow">CHOOSE YOUR CHAPTER</div><p>Pick a season to see every indexed match from that year.</p></div>{selectedYear !== null && <button className="clear-season" onClick={() => setSelectedYear(null)}>Show all seasons <X size={13}/></button>}</div>
+            <div className="season-grid">{seasons.map((year, index) => {
+              const count = matches.filter((match) => match.year === year).length;
+              return <button key={year} className={`season-card season-tone-${index % 4} ${selectedYear === year ? "selected" : ""}`} onClick={() => { setSelectedYear(year); document.getElementById("seasonMatches")?.scrollIntoView({ behavior: "smooth", block: "start" }); }} style={{ "--season-photo": `url("${seasonPhoto(year)}")` } as CSSProperties}>
+                <span className="season-card-photo"/><span className="season-card-year">{year}</span><span className="season-card-info"><b>{year} season</b><small>{count} {count === 1 ? "match" : "matches"} · {matches.find((match) => match.year === year)?.team || "Messi"}</small><small className="season-credit">{seasonPhotoCredit(year)}</small></span><ArrowUpRight size={15} className="season-card-arrow"/>
+              </button>;
+            })}</div>
+            <div id="seasonMatches" className="matches-toolbar"><div className="matches-title"><div><div className="eyebrow">{selectedYear === null ? "THE FULL TIMELINE" : `SEASON ${selectedYear}`}</div><b>{selectedYear === null ? "All matches" : `${selectedYear} matches`}</b><small>{filtered.length.toLocaleString()} matches in this view</small></div></div><div className="toolbar"><label className="search-wrap"><Search size={16}/><input value={search} onChange={(e) => setSearch(e.target.value)} type="search" placeholder="Search a club, tournament, year…"/></label><div className="filter-pills">{["All", "Club", "International"].map((kind) => <button key={kind} className={`pill ${filter === kind ? "active" : ""}`} onClick={() => setFilter(kind)}>{kind === "All" ? "All matches" : kind}</button>)}</div></div></div>
             <div className="archive-list">{years.map((year) => {
-              const rows = filtered.filter((match) => match.year === year);
-              const isOpen = !collapsedYears.includes(year) || !!search || filter !== "All";
+              const rows = pageMatches.filter((match) => match.year === year);
+              const isOpen = !collapsedYears.includes(year) || !!search || filter !== "All" || selectedYear !== null;
               const types = [...new Set(rows.map((match) => match.type))];
               return <section className="year-block" key={year}><button className="year-heading year-toggle" onClick={() => setCollapsedYears((prev) => prev.includes(year) ? prev.filter((y) => y !== year) : [...prev, year])}><b>{year}</b><span>{rows.length} {rows.length === 1 ? "MATCH" : "MATCHES"}</span><i/><ChevronDown className={isOpen ? "turned" : ""} size={15}/></button>{isOpen && <div className="year-body">{types.map((type) => {
                 const items = rows.filter((match) => match.type === type);
-                return <div key={type} className="type-group"><div className={`type-heading ${type === "International" ? "gold" : ""}`}>{type === "International" ? <Globe2 size={12}/> : <Trophy size={12}/>} {type.toUpperCase()}<i/></div>{[...new Set(items.map((m) => m.competition))].map((competition) => <div key={competition}><div className="competition-heading">{competition}<i/></div>{items.filter((m) => m.competition === competition).map((match) => <MatchRow key={match.id} match={match} watched={progress.watched.includes(match.id)} saved={progress.saved.includes(match.id)} onWatched={() => toggleProgress("watched", match.id)} onSaved={() => toggleProgress("saved", match.id)}/>)}</div>)}
+                return <div key={type} className="type-group"><div className={`type-heading ${type === "International" ? "gold" : ""}`}>{type === "International" ? <Globe2 size={12}/> : <Trophy size={12}/>} {type.toUpperCase()}<i/></div>{[...new Set(items.map((m) => m.competition))].map((competition) => <div key={competition}><div className="competition-heading">{competition}<i/></div>{items.filter((m) => m.competition === competition).map((match) => <MatchRow key={match.id} match={match} watched={progress.watched.includes(match.id)} saved={progress.saved.includes(match.id)} onWatched={() => toggleProgress("watched", match.id)} onSaved={() => toggleProgress("saved", match.id)} user={user} firebase={firebase} notify={notify}/>)}</div>)}
                 </div>;
               })}</div>}</section>;
             })}{years.length === 0 && <div className="empty-state"><Search size={28}/><b>No matches found</b><p>Try a different search or filter.</p></div>}</div>
+            {filtered.length > pageSize && <nav className="pagination" aria-label="Match archive pages"><button className="page-button" onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={page === 1}><ChevronDown size={14}/> Previous</button><span>Page <b>{page}</b> of <b>{pageCount}</b></span><button className="page-button" onClick={() => setPage((current) => Math.min(pageCount, current + 1))} disabled={page === pageCount}>Next <ChevronDown size={14}/></button></nav>}
           </section>
         </div>}
 
-        {view === "watchlist" && <div className="page"><div className="simple-page-head"><div className="eyebrow">YOUR PERSONAL JOURNEY</div><h1>My watchlist</h1><p>Every match you save, all in one place.</p></div><div className="progress-card"><div className="progress-ring">{percent}%</div><div className="progress-copy"><b>{watchedCount} of {matches.length} archive matches watched</b><p>Your journey through the archive is underway. Keep going.</p><div className="progress-track"><i style={{width:`${percent}%`}}/></div></div></div><div className="list-card">{watchMatches.length ? watchMatches.map((match) => <MatchRow key={match.id} match={match} watched={progress.watched.includes(match.id)} saved={progress.saved.includes(match.id)} onWatched={() => toggleProgress("watched", match.id)} onSaved={() => toggleProgress("saved", match.id)}/>) : <div className="empty-state"><Clock3 size={28}/><b>Your watchlist is waiting</b><p>Save matches from the archive to build your next watch session.</p><button onClick={() => setView("matches")}>Explore the archive <ArrowUpRight size={13}/></button></div>}</div></div>}
+        {view === "watchlist" && <div className="page"><div className="simple-page-head"><div className="eyebrow">YOUR PERSONAL JOURNEY</div><h1>My watchlist</h1><p>Every match you save, all in one place.</p></div><div className="progress-card"><div className="progress-ring">{percent}%</div><div className="progress-copy"><b>{watchedCount} of {matches.length} archive matches watched</b><p>Your journey through the archive is underway. Keep going.</p><div className="progress-track"><i style={{width:`${percent}%`}}/></div></div></div><div className="list-card">{watchMatches.length ? watchMatches.map((match) => <MatchRow key={match.id} match={match} watched={progress.watched.includes(match.id)} saved={progress.saved.includes(match.id)} onWatched={() => toggleProgress("watched", match.id)} onSaved={() => toggleProgress("saved", match.id)} user={user} firebase={firebase} notify={notify}/>) : <div className="empty-state"><Clock3 size={28}/><b>Your watchlist is waiting</b><p>Save matches from the archive to build your next watch session.</p><button onClick={() => setView("matches")}>Explore the archive <ArrowUpRight size={13}/></button></div>}</div></div>}
 
         {view === "community" && <div className="page"><div className="simple-page-head"><div className="eyebrow">ONE CLUB. ONE COMMUNITY.</div><h1>The fan room</h1><p>Prove you&apos;re one of us, then join the conversation.</p></div>{!progress.quizPassed ? <div className="community-card"><div className="quiz-head"><div className="quiz-icon"><CircleHelp size={20}/></div><div><b>Quick fan check</b><p>One question stands between you and the fan room.</p></div></div><div className="quiz-question">{quiz.question}</div><div className="quiz-options">{quiz.answers.map((answer,index) => <button key={answer} className={`quiz-option ${quizWrong === index ? "incorrect" : ""}`} onClick={() => {if(index === quiz.correct){setProgress((p) => ({...p,quizPassed:true}));setQuizWrong(null);notify("That’s right. Welcome to the fan room.")}else{setQuizWrong(index);window.setTimeout(() => setQuizWrong(null),700)}}}>{answer}</button>)}</div><div className="chat-locked">A little Messi knowledge keeps the conversation <b>for the fans.</b></div></div> : <div className="community-card"><div className="chat-top"><i className="online-dot"/> Messi fans <span>{firebase && user.uid !== "preview" ? "Live community chat" : "Preview chat · saved on this device"}</span></div><div className="chat-box"><div className="chat-messages">{messages.length ? messages.map((message) => <div className="chat-message" key={message.id}><b>{message.name}</b><small>{message.time}</small><br/>{message.text}</div>) : <div className="chat-locked">You&apos;re in. Kick off the conversation: what&apos;s the first Messi match you remember watching?</div>}<div ref={chatEnd}/></div><form className="chat-input" onSubmit={sendMessage}><input name="message" maxLength={240} placeholder="Share a match memory…" required/><button aria-label="Send message"><Send size={15}/></button></form></div></div>}</div>}
 
-        {view === "admin" && user.role === "admin" && <div className="page"><div className="simple-page-head"><div className="eyebrow">ARCHIVE MANAGEMENT</div><h1>Manage matches</h1><p>Add to or curate the shared match archive. Admin access is verified by Firebase.</p></div><div className="admin-toolbar"><div><Shield size={16}/><b>Admin controls</b><span>{remoteMatches.length} added matches</span></div><button className="admin-add" onClick={() => setMatchFormOpen(!matchFormOpen)}>{matchFormOpen ? <X size={15}/> : <Plus size={15}/>} {matchFormOpen ? "Cancel" : "Add a match"}</button></div>{matchFormOpen && <form className="match-form" onSubmit={addMatch}><label>Match date<input type="date" name="date" required/></label><label>Team<input name="team" placeholder="Barcelona" required/></label><label>Opponent<input name="opponent" placeholder="Real Madrid" required/></label><label>Competition<input name="competition" placeholder="La Liga" required/></label><label>Stage<input name="stage" placeholder="Matchday 34" required/></label><label>Score<input name="score" placeholder="2–6" required/></label><label>Match type<select name="type"><option>Club</option><option>International</option></select></label><label className="wide">Footballia link<input name="url" type="url" placeholder="https://footballia.net/matches/…" required/></label><button className="admin-add submit-match" type="submit"><Plus size={14}/> Publish match</button></form>}<div className="list-card admin-list">{remoteMatches.length ? remoteMatches.map((match) => <MatchRow key={match.id} match={match} watched={progress.watched.includes(match.id)} saved={progress.saved.includes(match.id)} onWatched={() => toggleProgress("watched", match.id)} onSaved={() => toggleProgress("saved", match.id)} canDelete onDelete={() => deleteMatch(match)}/>) : <div className="empty-state"><CalendarDays size={27}/><b>No custom matches yet</b><p>Use the admin form to add matches to the shared archive.</p></div>}</div></div>}
+        {view === "admin" && user.role === "admin" && <div className="page"><div className="simple-page-head"><div className="eyebrow">ARCHIVE MANAGEMENT</div><h1>Manage matches</h1><p>Add to or curate the shared match archive. Admin access is verified by Firebase.</p></div><div className="admin-toolbar"><div><Shield size={16}/><b>Admin controls</b><span>{remoteMatches.length} added matches</span></div><button className="admin-add" onClick={() => setMatchFormOpen(!matchFormOpen)}>{matchFormOpen ? <X size={15}/> : <Plus size={15}/>} {matchFormOpen ? "Cancel" : "Add a match"}</button></div>{matchFormOpen && <form className="match-form" onSubmit={addMatch}><label>Match date<input type="date" name="date" required/></label><label>Team<input name="team" placeholder="Barcelona" required/></label><label>Opponent<input name="opponent" placeholder="Real Madrid" required/></label><label>Competition<input name="competition" placeholder="La Liga" required/></label><label>Stage<input name="stage" placeholder="Matchday 34" required/></label><label>Score<input name="score" placeholder="2–6" required/></label><label>Match type<select name="type"><option>Club</option><option>International</option></select></label><label className="wide">Footballia link<input name="url" type="url" placeholder="https://footballia.net/matches/…" required/></label><button className="admin-add submit-match" type="submit"><Plus size={14}/> Publish match</button></form>}<div className="list-card admin-list">{remoteMatches.length ? remoteMatches.map((match) => <MatchRow key={match.id} match={match} watched={progress.watched.includes(match.id)} saved={progress.saved.includes(match.id)} onWatched={() => toggleProgress("watched", match.id)} onSaved={() => toggleProgress("saved", match.id)} user={user} firebase={firebase} notify={notify} canDelete onDelete={() => deleteMatch(match)}/>) : <div className="empty-state"><CalendarDays size={27}/><b>No custom matches yet</b><p>Use the admin form to add matches to the shared archive.</p></div>}</div></div>}
       </main>
       {toast && <div className="toast show" role="alert"><Check size={14}/>{toast}</div>}
       {mobileNav && <button className="nav-scrim" onClick={() => setMobileNav(false)} aria-label="Close menu"/>}

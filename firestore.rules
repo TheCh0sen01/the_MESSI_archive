@@ -25,6 +25,23 @@ service cloud.firestore {
       allow update, delete: if isAdmin();
     }
 
+    match /matchComments/{commentId} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.keys().hasOnly(['matchId', 'uid', 'name', 'text', 'createdAt'])
+        && request.resource.data.matchId is string
+        && request.resource.data.uid is string
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 60
+        && request.resource.data.text is string
+        && request.resource.data.text.size() > 0
+        && request.resource.data.text.size() <= 500;
+      allow update: if false;
+      allow delete: if (signedIn() && request.auth.uid == resource.data.uid) || isAdmin();
+    }
+
     match /matches/{matchId} {
       allow read: if signedIn();
       allow create, update, delete: if isAdmin();
